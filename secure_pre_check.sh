@@ -4,7 +4,7 @@ USERNAME="root"
 OUTPUT_FILE="precheck_results.csv"
 SERVER_LIST="server.txt"
 
-echo "IP,Reachability,Port 22,SSH,Sudo,OS,OS Version,Checking below ip:port from target,Status of ip:port connectivity from target,/var/log,/tmp,Error" > "$OUTPUT_FILE"
+echo "IP,Reachability,Port 22,SSH,Sudo,OS,OS Version,Outbound Test Target (IP:Port),Outbound Connectivity Result,/var/log,/tmp,Error" > "$OUTPUT_FILE"
 
 check_server() {
     local ip="$1"
