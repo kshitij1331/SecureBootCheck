@@ -85,8 +85,8 @@ def check_server(ip):
         'Sudo': 'N/A',
         'OS': 'N/A',
         'OS Version': 'N/A',
-        'Checking below ip:port from target': 'N/A',
-        'Status of ip:port connectivity from target': 'N/A',
+      'Outbound Test Target (IP:Port)': 'N/A',
+      'Outbound Connectivity Result': 'N/A',
         '/var/log': 'N/A',
         '/tmp': 'N/A',
         'Error': 'N/A'
@@ -126,9 +126,9 @@ def check_server(ip):
             target_port = None
 
         if target_ip and target_port:
-            result['Checking below ip:port from target'] = f"{target_ip}:{target_port}"
+            result['Outbound Test Target (IP:Port)'] = f"{target_ip}:{target_port}"
             port_status = check_port_from_target(ssh, target_ip, target_port)
-            result['Status of ip:port connectivity from target'] = "Reachable" if "Reachable" in port_status else "Not Reachable"
+            result['Outbound Connectivity Result'] = "Reachable" if "Reachable" in port_status else "Not Reachable"
 
         result['/var/log'] = get_disk_space(ssh, '/var/log')
         result['/tmp'] = get_disk_space(ssh, '/tmp')
@@ -150,7 +150,7 @@ def precheck_utility(servers, log_file):
             results.append(future.result())
 
     fieldnames = ['IP', 'Reachability', 'Port 22', 'SSH', 'Sudo', 'OS', 'OS Version',
-                  'Checking below ip:port from target', 'Status of ip:port connectivity from target',
+                  'Outbound Test Target (IP:Port)','Outbound Connectivity Result',
                   '/var/log', '/tmp', 'Error']
 
     with open(log_file, 'w', newline='') as csvfile:
