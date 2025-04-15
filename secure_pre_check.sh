@@ -20,60 +20,49 @@ check_server() {
     local tmpdir="N/A"
     local error=""
 
-    # Ping check
+    # 1. Ping check
     ping -c 1 "$ip" > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        reachability="Not Reachable"
-        echo "$ip,$reachability,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A" >> "$OUTPUT_FILE"
-        return
-    fi
+    [ $? -ne 0 ] && reachability="Not Reachable"
 
-    # Port 22 check
-    nc -z -w 3 "$ip" 22 > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        port_22="Closed"
-        ssh="Not Accessible"
-        echo "$ip,$reachability,$port_22,$ssh,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A" >> "$OUTPUT_FILE"
-        return
-    fi
+    # 2. Port 22 check via telnet
+    timeout 5 bash -c "echo '' | telnet $ip 22" > /dev/null 2>&1
+    [ $? -ne 0 ] && port_22="Closed"
 
-    # SSH commands
+    # 3. SSH check
     ssh -o BatchMode=yes -o ConnectTimeout=5 "$USERNAME@$ip" "exit" > /dev/null 2>&1
     if [ $? -ne 0 ]; then
         ssh="Not Accessible"
-        echo "$ip,$reachability,$port_22,$ssh,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A" >> "$OUTPUT_FILE"
-        return
+    else
+        # 4. Sudo check
+        ssh "$USERNAME@$ip" "sudo -n true" > /dev/null 2>&1
+        [ $? -eq 0 ] && sudo="Sudo Access" || sudo="No Sudo Access"
+
+        # 5. OS and version check
+        os_data=$(ssh "$USERNAME@$ip" "source /etc/os-release && echo \$ID,\$VERSION_ID" 2>/dev/null)
+        os=$(echo "$os_data" | cut -d',' -f1)
+        os_version_raw=$(echo "$os_data" | cut -d',' -f2)
+        os_version=$(echo "$os_version_raw" | cut -d'.' -f1)
+
+        # 6. Outbound test target based on OS
+        if [[ "$os" == "rhel" ]]; then
+            check_target="10.137.3.90:80"
+            target_ip="10.137.3.90"
+            target_port=80
+        elif [[ "$os" == "ubuntu" ]]; then
+            check_target="10.136.219.148:8081"
+            target_ip="10.136.219.148"
+            target_port=8081
+        fi
+
+        if [[ -n "$target_ip" && -n "$target_port" ]]; then
+            port_check_cmd="timeout 3 bash -c '</dev/tcp/${target_ip}/${target_port}' && echo Reachable || echo Not Reachable"
+            target_status=$(ssh "$USERNAME@$ip" "$port_check_cmd" 2>/dev/null)
+        fi
+
+        # 7. Disk checks
+        varlog=$(ssh "$USERNAME@$ip" "df -BM /var/log | tail -1 | awk '{print \$4}'" 2>/dev/null)
+        tmpdir=$(ssh "$USERNAME@$ip" "df -BM /tmp | tail -1 | awk '{print \$4}'" 2>/dev/null)
     fi
-
-    # Check sudo access
-    ssh "$USERNAME@$ip" "sudo -n true" > /dev/null 2>&1
-    [ $? -eq 0 ] && sudo="Sudo Access" || sudo="No Sudo Access"
-
-    # Get OS and Version
-    os_data=$(ssh "$USERNAME@$ip" "source /etc/os-release && echo \$ID,\$VERSION_ID" 2>/dev/null)
-    os=$(echo "$os_data" | cut -d',' -f1)
-    os_version_raw=$(echo "$os_data" | cut -d',' -f2)
-    os_version=$(echo "$os_version_raw" | cut -d'.' -f1)
-
-    # Port check based on OS
-    if [[ "$os" == "rhel" ]]; then
-        check_target="10.137.3.90:80"
-        target_ip="10.137.3.90"
-        target_port=80
-    elif [[ "$os" == "ubuntu" ]]; then
-        check_target="10.136.219.148:8081"
-        target_ip="10.136.219.148"
-        target_port=8081
-    fi
-
-    if [[ -n "$target_ip" && -n "$target_port" ]]; then
-        port_check_cmd="timeout 3 bash -c '</dev/tcp/${target_ip}/${target_port}' && echo Reachable || echo Not Reachable"
-        target_status=$(ssh "$USERNAME@$ip" "$port_check_cmd" 2>/dev/null)
-    fi
-
-    # Disk checks
-    varlog=$(ssh "$USERNAME@$ip" "df -BM /var/log | tail -1 | awk '{print \$4}'" 2>/dev/null)
-    tmpdir=$(ssh "$USERNAME@$ip" "df -BM /tmp | tail -1 | awk '{print \$4}'" 2>/dev/null)
 
     # Write to CSV
     echo "$ip,$reachability,$port_22,$ssh,$sudo,$os,$os_version,$check_target,$target_status,${varlog:-N/A},${tmpdir:-N/A},$error" >> "$OUTPUT_FILE"
