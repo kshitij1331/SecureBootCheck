@@ -1,75 +1,106 @@
 #!/bin/bash
+# Script to automatically verify SSH access, sudo privileges, disk usage, and outbound connectivity on a list of servers.
 
-USERNAME="root"
-OUTPUT_FILE="precheck_results.csv"
-SERVER_LIST="server.txt"
+USER="SI_Jiocompatch"
 
-echo "IP,Reachability,Port 22,SSH,Sudo,OS,OS Version,Outbound Test Target (IP:Port),Outbound Connectivity Result,/var/log,/tmp,Error" > "$OUTPUT_FILE"
+# Clear previous outputs and add header to CSV
+echo "hostname,ping_status,ssh_status,os_name,os_version,sudo_status,var_log_usage,tmp_usage,outbound_status" > final_status.csv
+> sudo_success_status.txt
+> sudo_failed_status.txt
+> ssh_failed_status.txt
+> ssh_failed_status1.txt
 
-check_server() {
-    local ip="$1"
-    local reachability="Reachable"
-    local port_22="Open"
-    local ssh="Accessible"
-    local sudo="N/A"
-    local os="N/A"
-    local os_version="N/A"
-    local check_target="N/A"
-    local target_status="N/A"
-    local varlog="N/A"
-    local tmpdir="N/A"
-    local error=""
+# Iterate over all servers listed in server.txt
+for SERVER in $(cat server.txt); do
+    [[ -z "$SERVER" || "$SERVER" =~ ^# ]] && continue
 
-    # 1. Ping check
-    ping -c 1 "$ip" > /dev/null 2>&1
-    [ $? -ne 0 ] && reachability="Not Reachable"
+    echo "🔍 Checking $SERVER..."
 
-    # 2. Port 22 check via telnet
-    timeout 5 bash -c "echo '' | telnet $ip 22" > /dev/null 2>&1
-    [ $? -ne 0 ] && port_22="Closed"
+    ping_status=$(ping -c 1 "$SERVER" &>/dev/null && echo "success" || echo "fail")
 
-    # 3. SSH check
-    ssh -o BatchMode=yes -o ConnectTimeout=5 "$USERNAME@$ip" "exit" > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        ssh="Not Accessible"
+    if [[ "$ping_status" == "success" ]]; then
+        ssh_status=$(ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$USER@$SERVER" "echo ok" 2>/dev/null)
+
+        if [[ "$ssh_status" == "ok" ]]; then
+            os_name=$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$USER@$SERVER" "source /etc/os-release && echo \$ID" 2>/dev/null)
+            os_version=$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$USER@$SERVER" "source /etc/os-release && echo \$VERSION_ID" 2>/dev/null)
+            sudo_status=$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$USER@$SERVER" "sudo -nv" &>/dev/null && echo "ok" || echo "not_ok")
+
+            # Disk usage for /var/log and /tmp
+            var_log_usage=$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$USER@$SERVER" "df -h /var/log | awk 'NR==2 {print \$5}'" 2>/dev/null)
+            tmp_usage=$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$USER@$SERVER" "df -h /tmp | awk 'NR==2 {print \$5}'" 2>/dev/null)
+
+            # Outbound test
+            if [[ "$os_name" == "rhel" ]]; then
+                target_ip="10.137.3.90"
+                target_port=80
+            elif [[ "$os_name" == "ubuntu" ]]; then
+                target_ip="10.136.219.148"
+                target_port=8081
+            fi
+
+            if [[ -n "$target_ip" && -n "$target_port" ]]; then
+                outbound_status=$(ssh "$USER@$SERVER" "timeout 3 bash -c '</dev/tcp/${target_ip}/${target_port}' && echo Reachable || echo Not Reachable" 2>/dev/null)
+            else
+                outbound_status="unknown"
+            fi
+
+            echo "$SERVER,$ping_status,$ssh_status,$os_name,$os_version,$sudo_status,$var_log_usage,$tmp_usage,$outbound_status" >> final_status.csv
+
+            if [[ "$sudo_status" == "ok" ]]; then
+                echo "$SERVER : $os_name $os_version : $USER sudo access ok" >> sudo_success_status.txt
+            else
+                echo "$SERVER : $os_name $os_version : $USER sudo access not ok" >> sudo_failed_status.txt
+            fi
+        else
+            if timeout 3 bash -c "</dev/tcp/$SERVER/22" 2>/dev/null; then
+                echo "$SERVER,$ping_status,ssh_key_issue,,,,,," >> final_status.csv
+                echo "$SERVER : ping success : SSH port open : SSH key issue" >> ssh_failed_status.txt
+            else
+                echo "$SERVER,$ping_status,ssh_port_closed,,,,,," >> final_status.csv
+                echo "$SERVER : ping success : SSH port not open" >> ssh_failed_status1.txt
+            fi
+        fi
     else
-        # 4. Sudo check
-        ssh "$USERNAME@$ip" "sudo -n true" > /dev/null 2>&1
-        [ $? -eq 0 ] && sudo="Sudo Access" || sudo="No Sudo Access"
+        if timeout 2 bash -c "</dev/tcp/$SERVER/22" 2>/dev/null; then
+            ssh_status=$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$USER@$SERVER" "echo ok" 2>/dev/null)
 
-        # 5. OS and version check
-        os_data=$(ssh "$USERNAME@$ip" "source /etc/os-release && echo \$ID,\$VERSION_ID" 2>/dev/null)
-        os=$(echo "$os_data" | cut -d',' -f1)
-        os_version_raw=$(echo "$os_data" | cut -d',' -f2)
-        os_version=$(echo "$os_version_raw" | cut -d'.' -f1)
+            if [[ "$ssh_status" == "ok" ]]; then
+                os_name=$(ssh -o BatchMode=yes -o ConnectTimeout=3 "$USER@$SERVER" "source /etc/os-release && echo \$ID" 2>/dev/null)
+                os_version=$(ssh -o BatchMode=yes -o ConnectTimeout=3 "$USER@$SERVER" "source /etc/os-release && echo \$VERSION_ID" 2>/dev/null)
+                sudo_status=$(ssh -o BatchMode=yes -o ConnectTimeout=3 "$USER@$SERVER" "sudo -nv" &>/dev/null && echo "sudo ok" || echo "sudo not_ok")
 
-        # 6. Outbound test target based on OS
-        if [[ "$os" == "rhel" ]]; then
-            check_target="10.137.3.90:80"
-            target_ip="10.137.3.90"
-            target_port=80
-        elif [[ "$os" == "ubuntu" ]]; then
-            check_target="10.136.219.148:8081"
-            target_ip="10.136.219.148"
-            target_port=8081
+                var_log_usage=$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$USER@$SERVER" "df -h /var/log | awk 'NR==2 {print \$5}'" 2>/dev/null)
+                tmp_usage=$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$USER@$SERVER" "df -h /tmp | awk 'NR==2 {print \$5}'" 2>/dev/null)
+
+                if [[ "$os_name" == "rhel" ]]; then
+                    target_ip="10.137.3.90"
+                    target_port=80
+                elif [[ "$os_name" == "ubuntu" ]]; then
+                    target_ip="10.136.219.148"
+                    target_port=8081
+                fi
+
+                if [[ -n "$target_ip" && -n "$target_port" ]]; then
+                    outbound_status=$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$USER@$SERVER" "timeout 3 bash -c '</dev/tcp/${target_ip}/${target_port}' && echo Repo Reachable || echo Repo Not Reachable" 2>/dev/null)
+                else
+                    outbound_status="unknown"
+                fi
+
+                echo "$SERVER,$ping_status,$ssh_status,$os_name,$os_version,$sudo_status,$var_log_usage,$tmp_usage,$outbound_status" >> final_status.csv
+
+                if [[ "$sudo_status" == "ok" ]]; then
+                    echo "$SERVER : ping failed : $os_name $os_version : $USER sudo access ok" >> sudo_success_status.txt
+                else
+                    echo "$SERVER : ping failed : $os_name $os_version : $USER sudo access not ok" >> sudo_failed_status.txt
+                fi
+            else
+                echo "$SERVER,$ping_status,ssh_key_issue,,,,,," >> final_status.csv
+                echo "$SERVER : ping failed : SSH port open : SSH key issue" >> ssh_failed_status1.txt
+            fi
+        else
+            echo "$SERVER,$ping_status,ssh_port_closed,,,,,," >> final_status.csv
+            echo "$SERVER : ping failed : SSH port not open" >> ssh_failed_status1.txt
         fi
-
-        if [[ -n "$target_ip" && -n "$target_port" ]]; then
-            port_check_cmd="timeout 3 bash -c '</dev/tcp/${target_ip}/${target_port}' && echo Reachable || echo Not Reachable"
-            target_status=$(ssh "$USERNAME@$ip" "$port_check_cmd" 2>/dev/null)
-        fi
-
-        # 7. Disk checks
-        varlog=$(ssh "$USERNAME@$ip" "df -BM /var/log | tail -1 | awk '{print \$4}'" 2>/dev/null)
-        tmpdir=$(ssh "$USERNAME@$ip" "df -BM /tmp | tail -1 | awk '{print \$4}'" 2>/dev/null)
     fi
-
-    # Write to CSV
-    echo "$ip,$reachability,$port_22,$ssh,$sudo,$os,$os_version,$check_target,$target_status,${varlog:-N/A},${tmpdir:-N/A},$error" >> "$OUTPUT_FILE"
-}
-
-export -f check_server
-export USERNAME OUTPUT_FILE
-
-# Run checks in parallel
-cat "$SERVER_LIST" | xargs -P 10 -n 1 -I {} bash -c "check_server {}"
+done
