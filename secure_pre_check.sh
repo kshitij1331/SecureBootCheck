@@ -1,7 +1,7 @@
 #!/bin/bash
 # Script to automatically verify SSH access, sudo privileges, disk usage, and outbound connectivity on a list of servers.
 
-USER="SI_Jiocompatch"
+USER="root"
 
 # Clear previous outputs and add header to CSV
 echo "hostname,ping_status,ssh_status,os_name,os_version,sudo_status,var_log_usage,tmp_usage,outbound_status" > final_status.csv
@@ -40,7 +40,7 @@ for SERVER in $(cat server.txt); do
             fi
 
             if [[ -n "$target_ip" && -n "$target_port" ]]; then
-                outbound_status=$(ssh "$USER@$SERVER" "timeout 3 bash -c '</dev/tcp/${target_ip}/${target_port}' && echo Reachable || echo Not Reachable" 2>/dev/null)
+                outbound_status=$(ssh "$USER@$SERVER" "timeout 3 bash -c '</dev/tcp/${target_ip}/${target_port}' && echo Repo Reachable || echo Repo Not Reachable" 2>/dev/null)
             else
                 outbound_status="unknown"
             fi
